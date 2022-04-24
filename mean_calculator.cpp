@@ -5,6 +5,8 @@
 #include <fstream>
 #include <algorithm>
 #include <sys/wait.h>
+#include <map>
+#include <cstring>
 
 #define CHEMISTRY "Chemistry"
 #define PHYSICS "Physics"
@@ -13,48 +15,17 @@
 #define LITERATURE "Literature"
 
 using namespace std;
+vector<string> courses = {
+        CHEMISTRY,
+        PHYSICS,
+        MATH,
+        ENGLISH,
+        LITERATURE
+};
+vector<pair<int, int>> dir_pipes;
+map<string, pair<int, int>> dir_pipes_map;
+vector<string> course_initiation_data;
 
-vector<double> chemistry_marks;
-vector<double> physics_marks;
-vector<double> maths_marks;
-vector<double> english_marks;
-vector<double> literature_marks;
-vector<pair<int, int>> pipes;
-int current_pipe_index;
-
-long send_through_pipe(const int &pipe_fd, const string &message);
-
-double calculate_mean(const vector<double> &marks) {
-    double sum = 0;
-    for (double mark: marks) {
-        sum += mark;
-    }
-    return sum / marks.size();
-}
-
-void extract_marks_from_csv_file(const string &file_name) {
-    ifstream file(file_name);
-    string line;
-    while (getline(file, line)) {
-        stringstream line_stream(line);
-        string cell;
-        vector<string> cells;
-        while (getline(line_stream, cell, ',')) {
-            cells.push_back(cell);
-        }
-        if (cells[0] == PHYSICS)
-            physics_marks.push_back(stod(cells[1]));
-        else if (cells[0] == CHEMISTRY)
-            chemistry_marks.push_back(stod(cells[1]));
-        else if (cells[0] == MATH)
-            maths_marks.push_back(stod(cells[1]));
-        else if (cells[0] == ENGLISH)
-            english_marks.push_back(stod(cells[1]));
-        else if (cells[0] == LITERATURE)
-            literature_marks.push_back(stod(cells[1]));
-    }
-    file.close();
-}
 
 vector<string> get_directories(const string &path) {
     vector<string> directories;
@@ -66,34 +37,7 @@ vector<string> get_directories(const string &path) {
     return directories;
 }
 
-vector<string> get_csv_files(const string &path) {
-    vector<string> files;
-    for (auto &p: std::filesystem::directory_iterator(path)) {
-        if (std::filesystem::is_regular_file(p) && p.path().extension() == ".csv") {
-            files.push_back(p.path().string());
-        }
-    }
-    return files;
-}
-
-vector<pid_t> create_processes(const int &n, int &cpi = current_pipe_index) {
-    vector<pid_t> pids;
-    for (int i = 0; i < n; ++i) {
-        cpi = i;
-        pid_t pid = fork();
-        if (pid == 0) {
-            break;
-        }
-        pids.push_back(pid);
-    }
-    return pids;
-}
-
-vector<pid_t> create_course_processes() {
-    return create_processes(5);
-}
-
-void create_pipes(const int &number, vector<pair<int, int>> &pp = pipes) {
+void create_pipes(const int &number, vector<pair<int, int>> &pp) {
     pp = vector<pair<int, int>>(number);
     for (int i = 0; i < number; ++i) {
         int pipe_fd[2];
@@ -105,68 +49,86 @@ void create_pipes(const int &number, vector<pair<int, int>> &pp = pipes) {
     }
 }
 
-template<typename T>
-int find_index_of_element(const vector<T> &target, const T &element) {
-    for (int i = 0; i < target.size(); ++i) {
-        if (target[i] == element) {
-            return i;
-        }
+string get_course_initiation_data() {
+    stringstream ss;
+    string delim;
+    for (const auto &item: course_initiation_data) {
+        ss << delim << item;
+        delim = "%";
     }
-    return -1;
+    return ss.str();
 }
 
-void handle_csv_processes(const vector<string> &csv_files, const vector<pair<int, int>> &pp) {
-    int current_pid = getpid();
-    int my_pipe_index = current_pipe_index;
-    close(pp[my_pipe_index].second);
-    char buffer[256];
-    sleep(2);
-    cout << "Process " << current_pid << " is waiting for data.\t" << getppid() << endl;
-    read(pp[my_pipe_index].first, buffer, 256);
-    int csv_file_index = buffer[0] - '0';
-    cout << "Process " << current_pid << " got data: " << csv_files[csv_file_index] << endl;
-    const auto &csv_file = csv_files[csv_file_index];
-    close(pp[my_pipe_index].first);
-    sleep(2);
-    exit(0);
-}
-
-void handle_dir_processes(const vector<string> &directories) {
-    int current_pid = getpid();
+void create_course_process(const pid_t &root_pid) {
     vector<pair<int, int>> pp;
-    int my_pipe_index = current_pipe_index;
-//    int pipe_fd[2];
-//    pipe_fd[0] = pipes[my_pipe_index].first;
-//    pipe_fd[1] = pipes[my_pipe_index].second;
-    close(pipes[my_pipe_index].second);
-    char buffer[256];
-    cout << "Current process: " << current_pid << " Going to wait for pipe to getting file index." << endl;
-    read(pipes[my_pipe_index].first, buffer, 256);
-    int file_index = buffer[0] - '0';
-    cout << "Current process: " << current_pid << " Got file index: " << file_index << endl;
-    const auto &dir_addr = directories[file_index];
-//    cout << "Current process: " << current_pid << " Going to read files from directory: " << dir_addr << endl;
-    close(pipes[my_pipe_index].first);
-    sleep(2);
-    auto csv_files = get_csv_files(dir_addr);
-    create_pipes(csv_files.size(), pp);
-    auto csv_processes = create_processes(csv_files.size());
-    if (getpid() == current_pid) {
-        cout << "CSV processes:" << endl;
-        for (auto &pid: csv_processes) {
-            cout << "\t" << pid << endl;
-        }
-        for (int i = 0; i < pp.size(); ++i) {
-            close(pp[i].first);
-            cout << "Process " << current_pid << " is writing to pipe: " << pp[i].second << endl;
-            send_through_pipe(pp[i].second, to_string(i));
-            close(pp[i].second);
-        }
-        wait(NULL);
-    } else {
-        handle_csv_processes(csv_files, pp);
+    create_pipes(courses.size(), pp);
+    auto course_data = get_course_initiation_data();
+    vector<pid_t> pids;
+    for (int i = 0; i < courses.size(); i++) {
+        auto course = courses[i];
+        pid_t pid = fork();
+        if (pid == 0) {
+            char *argv[6];
+            argv[0] = (char *) "./courseProcess";
+            argv[1] = (char *) course.c_str();
+            argv[2] = (char *) course_data.c_str();
+            argv[3] = (char *) to_string(pp[i].first).c_str();
+            argv[4] = (char *) to_string(pp[i].second).c_str();
+            argv[5] = NULL;
+            execvp(argv[0], argv);
+        } else
+            pids.push_back(pid);
     }
-    exit(0);
+}
+
+void create_dir_processes(const pid_t &root_pid, const string &course_dir) {
+    vector<pid_t> dir_processes;
+    auto directories = get_directories(course_dir);
+    create_pipes(directories.size(), dir_pipes);
+    for (int i = 0; i < directories.size(); i++) {
+        auto dir = directories[i];
+        dir_pipes_map[dir] = dir_pipes[i];
+        pid_t pid = fork();
+        if (pid == 0) {
+            char *argv[5];
+            argv[0] = (char *) "./directoryProcess";
+            argv[1] = (char *) dir.c_str();
+            argv[2] = (char *) (to_string(dir_pipes[i].first)).c_str();
+            argv[3] = (char *) (to_string(dir_pipes[i].second)).c_str();
+            argv[4] = NULL;
+            execvp(argv[0], argv);
+        } else if (pid > 0) {
+            dir_processes.push_back(pid);
+        } else {
+            cerr << "Failed to fork directory process" << endl;
+            exit(1);
+        }
+    }
+}
+
+
+void get_fifo_data_from_dir_process() {
+    char buffer[1024];
+    for (auto &dir_pip: dir_pipes_map) {
+        auto dir_name = dir_pip.first;
+        auto pipe = dir_pip.second;
+        close(pipe.second);
+        long rb = read(pipe.first, buffer, 1024);
+        if (rb == -1) {
+            cerr << "Failed to read from fifo: " << dir_name << endl;
+            exit(1);
+        } else if (rb == 0) {
+            cerr << "Fifo is empty: " << dir_name << endl;
+            exit(1);
+        } else if (buffer[rb - 1] != '\0') {
+            buffer[rb] = '\0';
+        }
+        close(pipe.first);
+        string data = buffer;
+        dir_name += "," + data;
+        course_initiation_data.push_back(dir_name);
+        memset(buffer, 0, 1024);
+    }
 }
 
 
@@ -177,63 +139,10 @@ int main(int argc, char *argv[]) {
     }
     string course_dir = argv[1];
     pid_t root_pid = getpid();
-    cout << "Root process id: " << root_pid << endl;
-    vector<pid_t> dir_processes;
-    auto directories = get_directories(course_dir);
-    create_pipes(directories.size());
-//    auto course_processes = create_course_processes();
-    if (getpid() == root_pid) {
-        cout << "Current pid: " << getpid() << " Going to create dir processes" << endl;
-//        cout << "Course processes: " << endl;
-//        for (auto pid: course_processes) {
-//            cout << "\t" << pid << endl;
-//        }
-        dir_processes = create_processes(directories.size());
-        if (getpid() == root_pid) {
-            cout << "Dir processes: " << endl;
-            for (auto pid: dir_processes) {
-                cout << "\t" << pid << endl;
-            }
-            for (int i = 0; i < pipes.size(); i++) {
-                close(pipes[i].first);
-                cout << "Current process: " << getpid() << " Going to send file index: " << i << endl;
-                send_through_pipe(pipes[i].second, to_string(i));
-                close(pipes[i].second);
-            }
-        } else {
-            handle_dir_processes(directories);
-        }
-    }
-//    if (find_index_of_element(course_processes, getpid()) == -1 &&
-//        getpid() != root_pid) {
-//        cout << "****Current pid: " << getpid() << " :" << find_index_of_element(course_processes, getpid()) << endl;
-//        auto index = find_index_of_element(dir_processes, getpid());
-//        if (index != -1) {
-//            auto dir_addr = directories[index];
-//            auto csv_files = get_csv_files(dir_addr);
-//            auto cpp = getpid();
-//            auto csv_processes = create_processes(csv_files.size());
-//            if (cpp != getpid()) {
-//                auto csv_index = find_index_of_element(csv_processes, getpid());
-//                if (csv_index != -1) {
-//                    extract_marks_from_csv_file(csv_files[csv_index]);
-//                }
-//            }
-//        }
-//    }
-    if (getpid() == root_pid) {
-        wait(NULL);
-        cout << "Current pid: " << getpid() << " Going to wait for csv processes" << endl;
-        cout << "Chemistry mean: " << calculate_mean(chemistry_marks) << endl;
-        cout << "Physics mean: " << calculate_mean(physics_marks) << endl;
-        cout << "Maths mean: " << calculate_mean(maths_marks) << endl;
-        cout << "English mean: " << calculate_mean(english_marks) << endl;
-        cout << "Literature mean: " << calculate_mean(literature_marks) << endl;
-    } else {
-        exit(0);
-    }
-}
+//    cout << "Root process id: " << root_pid << endl;
 
-long send_through_pipe(const int &pipe_fd, const string &message) {
-    return write(pipe_fd, message.c_str(), message.size());
+    create_dir_processes(root_pid, course_dir);
+    get_fifo_data_from_dir_process();
+    create_course_process(root_pid);
+    wait(NULL);
 }
